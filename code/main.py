@@ -222,12 +222,12 @@ if __name__ == '__main__':
     parser.add_argument('--epochs', type=int, default=10,
                         help='training epoch number')
     parser.add_argument('--class_num', type=int, default=len(label2id),
-                        help='label number')
-    parser.add_argument('--seed', default=1000, type=int)
-    parser.add_argument('--learning_rate', default=1e-3, type=float)
-    parser.add_argument('--bert_lr', default=2e-5, type=float)
-    parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")
-    parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight deay if we apply some.")
+                        help='label number')  # 标签个数，10种关系
+    parser.add_argument('--seed', default=1000, type=int)  # 随机种子
+    parser.add_argument('--learning_rate', default=1e-3, type=float)  # 学习率
+    parser.add_argument('--bert_lr', default=2e-5, type=float) # bert学习率
+    parser.add_argument("--adam_epsilon", default=1e-8, type=float, help="Epsilon for Adam optimizer.")  # 优化器
+    parser.add_argument("--weight_decay", default=0.0, type=float, help="Weight deay if we apply some.") 
 
     parser.add_argument('--emb_dropout', type=float, default=0.5)
     parser.add_argument('--num_layers', type=int, default=1)

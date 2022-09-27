@@ -1,6 +1,6 @@
 [[source]]
 name = "pypi"
-url = "https://pypi.org/simple"
+url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 verify_ssl = true
 
 [dev-packages]
@@ -13,4 +13,4 @@ torch = ">=1.4.0"
 transformers = "==3.4.0"
 
 [requires]
-python_version = "3.6"
+python_version = "3.8"
