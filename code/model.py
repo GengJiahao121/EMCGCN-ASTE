@@ -120,30 +120,30 @@ class Biaffine(nn.Module):
         return biaffine
 
 
-class EMCGCN(torch.nn.Module):
+class EMCGCN(torch.nn.Module): # 用pytorch建立的EMCGCN神经网络模型框架
     def __init__(self, args):
-        super(EMCGCN, self).__init__()
-        self.args = args
-        self.bert = BertModel.from_pretrained(args.bert_model_path)
-        self.tokenizer = BertTokenizer.from_pretrained(args.bert_model_path)
-        self.dropout_output = torch.nn.Dropout(args.emb_dropout)
+        super(EMCGCN, self).__init__() # 固定写法，目的是向其父类中传递参数进行初始化其父类
+        self.args = args 
+        self.bert = BertModel.from_pretrained(args.bert_model_path) # 加载用到的bert模型
+        self.tokenizer = BertTokenizer.from_pretrained(args.bert_model_path) # 加载分词器
+        self.dropout_output = torch.nn.Dropout(args.emb_dropout) # 
 
-        self.post_emb = torch.nn.Embedding(args.post_size, args.class_num, padding_idx=0)
-        self.deprel_emb = torch.nn.Embedding(args.deprel_size, args.class_num, padding_idx=0)
-        self.postag_emb  = torch.nn.Embedding(args.postag_size, args.class_num, padding_idx=0)
-        self.synpost_emb = torch.nn.Embedding(args.synpost_size, args.class_num, padding_idx=0)
+        self.post_emb = torch.nn.Embedding(args.post_size, args.class_num, padding_idx=0) # 相对位置嵌入
+        self.deprel_emb = torch.nn.Embedding(args.deprel_size, args.class_num, padding_idx=0) # 依赖关系嵌入
+        self.postag_emb  = torch.nn.Embedding(args.postag_size, args.class_num, padding_idx=0) # 词性标注嵌入
+        self.synpost_emb = torch.nn.Embedding(args.synpost_size, args.class_num, padding_idx=0) # 基于依赖树的相对位置距离嵌入
         
-        self.triplet_biaffine = Biaffine(args, args.gcn_dim, args.gcn_dim, args.class_num, bias=(True, True))
-        self.ap_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim)
+        self.triplet_biaffine = Biaffine(args, args.gcn_dim, args.gcn_dim, args.class_num, bias=(True, True)) # 初始化Biaffine Attention
+        self.ap_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim) # 前向全链接层，输入bert_feature_dim的向量维度768， 输出args.gcn_dim300维度
         self.op_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim)
 
-        self.dense = nn.Linear(args.bert_feature_dim, args.gcn_dim)
-        self.num_layers = args.num_layers
-        self.gcn_layers = nn.ModuleList()
+        self.dense = nn.Linear(args.bert_feature_dim, args.gcn_dim) # 
+        self.num_layers = args.num_layers #
+        self.gcn_layers = nn.ModuleList() # 图卷积神经网络的层数
 
-        self.layernorm = LayerNorm(args.bert_feature_dim)
+        self.layernorm = LayerNorm(args.bert_feature_dim) # 层次归一化
 
-        for i in range(self.num_layers):
+        for i in range(self.num_layers): # 层次的数量代表了经过几次循环特征提取
             self.gcn_layers.append(
                 GraphConvLayer(args.device, args.gcn_dim, 5*args.class_num, args.class_num, args.pooling))
 
@@ -151,25 +151,25 @@ class EMCGCN(torch.nn.Module):
         bert_feature, _ = self.bert(tokens, masks)
         bert_feature = self.dropout_output(bert_feature) 
 
-        batch, seq = masks.shape
-        tensor_masks = masks.unsqueeze(1).expand(batch, seq, seq).unsqueeze(-1)
+        batch, seq = masks.shape # 16 x 102
+        tensor_masks = masks.unsqueeze(1).expand(batch, seq, seq).unsqueeze(-1) # 16 x 102 -> 16 x 102 x 102 -> 16 x 102 x 102 x 1
         
-        # * multi-feature
+        # * multi-feature 16 x 102 x 102 x 10也就是说这个时候进行向量化
         word_pair_post_emb = self.post_emb(word_pair_position)
         word_pair_deprel_emb = self.deprel_emb(word_pair_deprel)
         word_pair_postag_emb = self.postag_emb(word_pair_pos)
         word_pair_synpost_emb = self.synpost_emb(word_pair_synpost)
         
         # BiAffine
-        ap_node = F.relu(self.ap_fc(bert_feature))
-        op_node = F.relu(self.op_fc(bert_feature))
-        biaffine_edge = self.triplet_biaffine(ap_node, op_node)
-        gcn_input = F.relu(self.dense(bert_feature))
-        gcn_outputs = gcn_input
-
-        weight_prob_list = [biaffine_edge, word_pair_post_emb, word_pair_deprel_emb, word_pair_postag_emb, word_pair_synpost_emb]
+        ap_node = F.relu(self.ap_fc(bert_feature)) # 对应论文中的MLPa
+        op_node = F.relu(self.op_fc(bert_feature)) # 对应论文中MLPo
+        biaffine_edge = self.triplet_biaffine(ap_node, op_node) # 16 x 102 x 102 x 10 gcn的边关系输入
+        gcn_input = F.relu(self.dense(bert_feature)) # 压缩，通过全链接网络变换一下维度 gcn的词向量输入
+        gcn_outputs = gcn_input # 上一层的output是下一层的input
+ 
+        weight_prob_list = [biaffine_edge, word_pair_post_emb, word_pair_deprel_emb, word_pair_postag_emb, word_pair_synpost_emb] # 各种R
         
-        biaffine_edge_softmax = F.softmax(biaffine_edge, dim=-1) * tensor_masks
+        biaffine_edge_softmax = F.softmax(biaffine_edge, dim=-1) * tensor_masks # 对类别分数进行归一化到0~1之间
         word_pair_post_emb_softmax = F.softmax(word_pair_post_emb, dim=-1) * tensor_masks
         word_pair_deprel_emb_softmax = F.softmax(word_pair_deprel_emb, dim=-1) * tensor_masks
         word_pair_postag_emb_softmax = F.softmax(word_pair_postag_emb, dim=-1) * tensor_masks
@@ -177,15 +177,20 @@ class EMCGCN(torch.nn.Module):
 
         self_loop = []
         for _ in range(batch):
-            self_loop.append(torch.eye(seq))
+            self_loop.append(torch.eye(seq)) # torch.eye()生成对角钱全1， 其余部分为0的二维数组 batchsize = 16 -> 16个102 x 102 对角线为1 的多维矩阵
+        # torch.stack()作用是将一个个二维数组进行拼接，形成一个三维矩阵。.unsqueeze()函数作用是升维。 .expend()函数作用是：将张量广播到新形状16 x 5*10 x 102 x 102 。
+        # .permute()函数的作用是重新排列，也就是重新建立形状，置换维度。
+        # 16 x 102 x 102 -> 增加维度16 x 1 x 102 x 102 -> 16 x 5*10 x 102 x 102 
+        # tensor_masks: 16 x 102 x 102 x 1 -> 16 x 1 x 102 x 102 -> 经过contiguous()函数之后内存存储顺序也改变了
+        # 最后self_loop是16 x 50 x 102 x 102, 且对多余部分进行了去除，都设为0
         self_loop = torch.stack(self_loop).to(self.args.device).unsqueeze(1).expand(batch, 5*self.args.class_num, seq, seq) * tensor_masks.permute(0, 3, 1, 2).contiguous()
         
         weight_prob = torch.cat([biaffine_edge, word_pair_post_emb, word_pair_deprel_emb, \
-            word_pair_postag_emb, word_pair_synpost_emb], dim=-1)
+            word_pair_postag_emb, word_pair_synpost_emb], dim=-1) # 拼接的是5个R 16 x 102 x 102 x 50
         weight_prob_softmax = torch.cat([biaffine_edge_softmax, word_pair_post_emb_softmax, \
-            word_pair_deprel_emb_softmax, word_pair_postag_emb_softmax, word_pair_synpost_emb_softmax], dim=-1)
+            word_pair_deprel_emb_softmax, word_pair_postag_emb_softmax, word_pair_synpost_emb_softmax], dim=-1) # 拼接的是经过softmax的5个R
 
-        for _layer in range(self.num_layers):
+        for _layer in range(self.num_layers): # 图卷积神经网络的层数，也就是循环的次数
             gcn_outputs, weight_prob = self.gcn_layers[_layer](weight_prob_softmax, weight_prob, gcn_outputs, self_loop)  # [batch, seq, dim]
             weight_prob_list.append(weight_prob)
 
