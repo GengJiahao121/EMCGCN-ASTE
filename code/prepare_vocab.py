@@ -9,7 +9,6 @@ import numpy as np
 from collections import Counter
 from collections import defaultdict
 
-
 class VocabHelp(object):
     def __init__(self, counter, specials=['<pad>', '<unk>']):
         self.pad_index = 0

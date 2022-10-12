@@ -59,29 +59,29 @@ class GraphConvLayer(nn.Module):
         self.highway = RefiningStrategy(gcn_dim, self.edge_dim, self.dep_embed_dim, dropout_ratio=0.5)
 
     def forward(self, weight_prob_softmax, weight_adj, gcn_inputs, self_loop):
-        batch, seq, dim = gcn_inputs.shape
-        weight_prob_softmax = weight_prob_softmax.permute(0, 3, 1, 2)
+        batch, seq, dim = gcn_inputs.shape # 16 x 102 x 300
+        weight_prob_softmax = weight_prob_softmax.permute(0, 3, 1, 2) # 16 x 102 x 102 x 50 -> 16 x 50 x 102 x 102 
     
-        gcn_inputs = gcn_inputs.unsqueeze(1).expand(batch, self.edge_dim, seq, dim)
+        gcn_inputs = gcn_inputs.unsqueeze(1).expand(batch, self.edge_dim, seq, dim) # 16 x 102 x 300 -> 16 x 1 x 102 x 300 -> 16 x 50 x 102 x 300
 
         weight_prob_softmax += self_loop
-        Ax = torch.matmul(weight_prob_softmax, gcn_inputs)
+        Ax = torch.matmul(weight_prob_softmax, gcn_inputs) # torch.matmul()是tensor乘法 16x102x102x50 X 16x50x102x300 
         if self.pooling == 'avg':
             Ax = Ax.mean(dim=1)
         elif self.pooling == 'max':
             Ax, _ = Ax.max(dim=1)
         elif self.pooling == 'sum':
             Ax = Ax.sum(dim=1)
-        # Ax: [batch, seq, dim]
+        # Ax: [batch, seq, dim] 16 x 102 x 300
         gcn_outputs = self.W(Ax)
         gcn_outputs = self.layernorm(gcn_outputs)
         weights_gcn_outputs = F.relu(gcn_outputs)
 
-        node_outputs = weights_gcn_outputs
-        weight_prob_softmax = weight_prob_softmax.permute(0, 2, 3, 1).contiguous()
-        node_outputs1 = node_outputs.unsqueeze(1).expand(batch, seq, seq, dim)
-        node_outputs2 = node_outputs1.permute(0, 2, 1, 3).contiguous()
-        edge_outputs = self.highway(weight_adj, node_outputs1, node_outputs2)
+        node_outputs = weights_gcn_outputs # 最终的经过图卷积神经网络的经过特征提取之后的词向量
+        weight_prob_softmax = weight_prob_softmax.permute(0, 2, 3, 1).contiguous() # 16 x 50 x 102 x 102 -> 16 x 102 x 102 x 50
+        node_outputs1 = node_outputs.unsqueeze(1).expand(batch, seq, seq, dim) # 16 x 102 x 300 -> 16 x 1 x 102 x 300 -> 16 x 102 x 102 x 300
+        node_outputs2 = node_outputs1.permute(0, 2, 1, 3).contiguous() # 16 x 102 x 102 x 300 -> 16 x 102 x 102 x 300
+        edge_outputs = self.highway(weight_adj, node_outputs1, node_outputs2) # 这个就是节点和边关系进行拼接
 
         return node_outputs, edge_outputs
 
@@ -90,60 +90,61 @@ class Biaffine(nn.Module):
     def __init__(self, args, in1_features, in2_features, out_features, bias=(True, True)):
         super(Biaffine, self).__init__()
         self.args = args
-        self.in1_features = in1_features
-        self.in2_features = in2_features
-        self.out_features = out_features
+        self.in1_features = in1_features # 300
+        self.in2_features = in2_features # 300
+        self.out_features = out_features # 10
         self.bias = bias
-        self.linear_input_size = in1_features + int(bias[0])
-        self.linear_output_size = out_features * (in2_features + int(bias[1]))
+        self.linear_input_size = in1_features + int(bias[0]) # 301
+        self.linear_output_size = out_features * (in2_features + int(bias[1])) # 3010
         self.linear = torch.nn.Linear(in_features=self.linear_input_size,
                                     out_features=self.linear_output_size,
-                                    bias=False)
+                                    bias=False) # 301 -> 3010
 
-    def forward(self, input1, input2):
-        batch_size, len1, dim1 = input1.size()
-        batch_size, len2, dim2 = input2.size()
+    def forward(self, input1, input2): # input1和input2分别是300维的词向量a和词向量o
+        batch_size, len1, dim1 = input1.size() # 16 x 句子1的token长度 x dim
+        batch_size, len2, dim2 = input2.size() # 16 x 句子2的token长度 x dim
         if self.bias[0]:
             ones = torch.ones(batch_size, len1, 1).to(self.args.device)
-            input1 = torch.cat((input1, ones), dim=2)
+            input1 = torch.cat((input1, ones), dim=2) # dim变成301
             dim1 += 1
         if self.bias[1]:
             ones = torch.ones(batch_size, len2, 1).to(self.args.device)
             input2 = torch.cat((input2, ones), dim=2)
             dim2 += 1
-        affine = self.linear(input1)
-        affine = affine.view(batch_size, len1*self.out_features, dim2)
-        input2 = torch.transpose(input2, 1, 2)
-        biaffine = torch.bmm(affine, input2)
-        biaffine = torch.transpose(biaffine, 1, 2)
-        biaffine = biaffine.contiguous().view(batch_size, len2, len1, self.out_features)
+        affine = self.linear(input1) # 线性变换301 -> 3010 : 16 x len1 x 3010
+        affine = affine.view(batch_size, len1*self.out_features, dim2) # 16 x len1*10 x 301
+        input2 = torch.transpose(input2, 1, 2) # 16 x len2 x 301 -> 16 x 301 x len2
+        biaffine = torch.bmm(affine, input2) # 矩阵乘法 16 x len1*10 x len2
+        biaffine = torch.transpose(biaffine, 1, 2) # 16 x len2 x len1*10
+        biaffine = biaffine.contiguous().view(batch_size, len2, len1, self.out_features) # 16 x len2 x len1 x 10
         return biaffine
 
 
 class EMCGCN(torch.nn.Module): # 用pytorch建立的EMCGCN神经网络模型框架
-    def __init__(self, args):
+    def __init__(self, args): # 对一些模型、参数进行初始化
         super(EMCGCN, self).__init__() # 固定写法，目的是向其父类中传递参数进行初始化其父类
         self.args = args 
         self.bert = BertModel.from_pretrained(args.bert_model_path) # 加载用到的bert模型
         self.tokenizer = BertTokenizer.from_pretrained(args.bert_model_path) # 加载分词器
         self.dropout_output = torch.nn.Dropout(args.emb_dropout) # 
 
+        # 这里并没有生成向量，而是初始化了一个对象，这个对象是干生成向量这个活的
         self.post_emb = torch.nn.Embedding(args.post_size, args.class_num, padding_idx=0) # 相对位置嵌入
         self.deprel_emb = torch.nn.Embedding(args.deprel_size, args.class_num, padding_idx=0) # 依赖关系嵌入
         self.postag_emb  = torch.nn.Embedding(args.postag_size, args.class_num, padding_idx=0) # 词性标注嵌入
         self.synpost_emb = torch.nn.Embedding(args.synpost_size, args.class_num, padding_idx=0) # 基于依赖树的相对位置距离嵌入
         
-        self.triplet_biaffine = Biaffine(args, args.gcn_dim, args.gcn_dim, args.class_num, bias=(True, True)) # 初始化Biaffine Attention
-        self.ap_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim) # 前向全链接层，输入bert_feature_dim的向量维度768， 输出args.gcn_dim300维度
-        self.op_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim)
+        self.triplet_biaffine = Biaffine(args, args.gcn_dim, args.gcn_dim, args.class_num, bias=(True, True)) # 初始化Biaffine Attention对象
+        self.ap_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim) # MLPa, 768->300前向全链接层，输入bert_feature_dim的向量维度768， 输出args.gcn_dim300维度
+        self.op_fc = nn.Linear(args.bert_feature_dim, args.gcn_dim) # MLPo, 768>300
 
-        self.dense = nn.Linear(args.bert_feature_dim, args.gcn_dim) # 
+        self.dense = nn.Linear(args.bert_feature_dim, args.gcn_dim) # 压缩线性变换
         self.num_layers = args.num_layers #
-        self.gcn_layers = nn.ModuleList() # 图卷积神经网络的层数
+        self.gcn_layers = nn.ModuleList() # 图卷积神经网络的层
 
         self.layernorm = LayerNorm(args.bert_feature_dim) # 层次归一化
 
-        for i in range(self.num_layers): # 层次的数量代表了经过几次循环特征提取
+        for i in range(self.num_layers): # 1个
             self.gcn_layers.append(
                 GraphConvLayer(args.device, args.gcn_dim, 5*args.class_num, args.class_num, args.pooling))
 
@@ -190,7 +191,7 @@ class EMCGCN(torch.nn.Module): # 用pytorch建立的EMCGCN神经网络模型框�
         weight_prob_softmax = torch.cat([biaffine_edge_softmax, word_pair_post_emb_softmax, \
             word_pair_deprel_emb_softmax, word_pair_postag_emb_softmax, word_pair_synpost_emb_softmax], dim=-1) # 拼接的是经过softmax的5个R
 
-        for _layer in range(self.num_layers): # 图卷积神经网络的层数，也就是循环的次数
+        for _layer in range(self.num_layers): # 图卷积神经网络
             gcn_outputs, weight_prob = self.gcn_layers[_layer](weight_prob_softmax, weight_prob, gcn_outputs, self_loop)  # [batch, seq, dim]
             weight_prob_list.append(weight_prob)
 

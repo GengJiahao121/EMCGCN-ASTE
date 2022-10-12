@@ -61,34 +61,34 @@ def get_evaluate_spans(tags, length, token_range):
 class Instance(object):
     def __init__(self, tokenizer, sentence_pack, post_vocab, deprel_vocab, postag_vocab, synpost_vocab, args):
         self.id = sentence_pack['id'] # 句子id
-        self.sentence = sentence_pack['sentence'] # 句子信息
-        self.tokens = self.sentence.strip().split() #将句子进行分词得到的词列表; Python strip() 方法用于移除字符串头尾指定的字符（默认为空格或换行符）或字符序列。
+        self.sentence = sentence_pack['sentence'] # 句子
+        self.tokens = self.sentence.strip().split() # 分词，将句子进行分词得到的词列表; Python strip() 方法用于移除字符串头尾指定的字符（默认为空格或换行符）或字符序列。
         self.postag = sentence_pack['postag'] # 词性标注信息，目的是确定词的词性
-        self.head = sentence_pack['head'] # ???
-        self.deprel = sentence_pack['deprel'] # 词与词之间的关系，依存关系
+        self.head = sentence_pack['head'] # 每个词在依赖树中依赖谁，0代表root
+        self.deprel = sentence_pack['deprel'] # 每个词在依赖树中和其依赖的head的关系
         self.sen_length = len(self.tokens) # 句子长度
-        self.token_range = [] # 每个词的开始地址和结束地址 
-        self.bert_tokens = tokenizer.encode(self.sentence) # 将句子序列转换成数字序列，并加入开始CLS和SEP
+        self.token_range = [] # 每个词对应的形成的数字的开始地址和结束地址，有的时候一次词由两个数字才可以表示
+        self.bert_tokens = tokenizer.encode(self.sentence) # 将句子序列转换成数字序列，并默认自动加入开始CLS和SEP
         #初始化bert的输入的各种用到的序列
-        self.length = len(self.bert_tokens) # 加入CLS和SEP之后的长度
+        self.length = len(self.bert_tokens) # 转换成数字序列并加入CLS和SEP之后的长度
         self.bert_tokens_padding = torch.zeros(args.max_sequence_len).long() # bert的输入序列统一长度max_sequence
-        self.aspect_tags = torch.zeros(args.max_sequence_len).long() # 
-        self.opinion_tags = torch.zeros(args.max_sequence_len).long() # 
-        self.tags = torch.zeros(args.max_sequence_len, args.max_sequence_len).long() # 矩阵
-        self.tags_symmetry = torch.zeros(args.max_sequence_len, args.max_sequence_len).long() # 
-        self.mask = torch.zeros(args.max_sequence_len) # 
+        self.aspect_tags = torch.zeros(args.max_sequence_len).long() # 用来记录序列中属于方面词的位置
+        self.opinion_tags = torch.zeros(args.max_sequence_len).long() # 用来记录序列中属于意见词的位置
+        self.tags = torch.zeros(args.max_sequence_len, args.max_sequence_len).long() # 最后预测的矩阵的真实标签
+        self.tags_symmetry = torch.zeros(args.max_sequence_len, args.max_sequence_len).long() # 最后预测的矩阵上对角线位置上的真实标签
+        self.mask = torch.zeros(args.max_sequence_len) # 对输入的序列没有用的部分进行mask
 
         for i in range(self.length):
-            self.bert_tokens_padding[i] = self.bert_tokens[i] # 句子长度未达到最大长度而进行的padding补0操作
-        self.mask[:self.length] = 1 #将mask序列全置为1
+            self.bert_tokens_padding[i] = self.bert_tokens[i] # 句子长度未达到最大长度对后面的位置而进行的padding补0操作，最后形成前面是句子对应的数字序列，后面都是0
+        self.mask[:self.length] = 1 #将mask序列全置为1，一样的道理，不mask的位置为1， mask的位置为0
 
-        # 计算每个token的开始地址和结束地址,因为有的词需要占用两个位置
+        # 计算每个token对应的数字序列的开始地址和结束地址,因为有的词需要占用两个位置
         token_start = 1 
         for i, w, in enumerate(self.tokens):
             token_end = token_start + len(tokenizer.encode(w, add_special_tokens=False))
             self.token_range.append([token_start, token_end-1])
             token_start = token_end
-        assert self.length == self.token_range[-1][-1]+2 # 多了CLS, SEP
+        assert self.length == self.token_range[-1][-1]+2 # 多了CLS, SEP，
 
         self.aspect_tags[self.length:] = -1 # padding部分设置为-1
         self.aspect_tags[0] = -1 # 第一个为cls，不可能为aspect,设置为-1
@@ -98,17 +98,17 @@ class Instance(object):
         self.opinion_tags[0] = -1 
         self.opinion_tags[self.length - 1] = -1
 
-        self.tags[:, :] = -1 # 标签矩阵初始化为-1
-        self.tags_symmetry[:, :] = -1 
-        for i in range(1, self.length-1): # 句子所在index的范围
-            for j in range(i, self.length-1): # 上三角
+        self.tags[:, :] = -1 # 先将标签矩阵全部初始化为-1，然后有用的地方再赋值成相应的值， tags对应的是triplet任务
+        self.tags_symmetry[:, :] = -1 # 同上tags_symmetry对应pairs任务
+        for i in range(1, self.length-1): # 句子所在index的范围都变成0
+            for j in range(i, self.length-1): # 上三角就够用了，为了减少计算量
                 self.tags[i][j] = 0
 
         # 虽然我们从json中读取的数据，但是我们要将其转换成机器识别的形式，所以我们要对各种用到的矩阵，数组进行赋值，初始化
         for triple in sentence_pack['triples']: # 迭代单个句子中的每组三元组
-            aspect = triple['target_tags']
-            opinion = triple['opinion_tags']
-            aspect_span = get_spans(aspect) # 方面词所在index范围
+            aspect = triple['target_tags'] # 方面词标记序列
+            opinion = triple['opinion_tags'] # 意见词标记序列
+            aspect_span = get_spans(aspect) # 通过get_spans()方法获取方面词所在index范围
             opinion_span = get_spans(opinion) # 意见词所在index范围
 
             '''set tag for aspect'''
@@ -155,7 +155,7 @@ class Instance(object):
                     self.opinion_tags[pl+1:pr+1] = -1 
                     self.tags[pl+1:pr+1, :] = -1 # tags矩阵的上述说的位置也是同样的规则进行初始化
                     self.tags[:, pl+1:pr+1] = -1
-            # 一个方面词一个意见的这样的关系，在tags矩阵中对应的位置进行赋值
+            # 一个方面词一个意见的这样的关系，在tags矩阵中对应的位置进行赋值，对应POS, NEG, NEU, T
             for al, ar in aspect_span: # 方面词组在句子中的跨度，如果有多个方面词组，就迭代多个
                 for pl, pr in opinion_span: # 意见词组在句子中的跨度
                     for i in range(al, ar+1): # 方面词在句子中的跨度的迭代
@@ -173,13 +173,13 @@ class Instance(object):
                                     self.tags[spl][sal] = label2id[triple['sentiment']] # 
                                 else:
                                     self.tags[sal][spl] = label2id[triple['sentiment']]
-        # 将tags_symmetry赋值成和tags矩阵一样内容
+        # 将tags_symmetry赋值成和tags矩阵对角线一样的内容，其他位置用不到
         for i in range(1, self.length-1):
             for j in range(i, self.length-1):
                 self.tags_symmetry[i][j] = self.tags[i][j]
                 self.tags_symmetry[j][i] = self.tags_symmetry[i][j]
         
-        '''1. generate position index of the word pair''' # 词与词之间在句子中的相对位置距离
+        '''1. generate position index of the word pair''' # 词与词之间在句子中的相对位置距离，最后生成的都是102 x 102的矩阵
         self.word_pair_position = torch.zeros(args.max_sequence_len, args.max_sequence_len).long() # 初始化
         for i in range(len(self.tokens)): # 句子中词的个数的迭代
             start, end = self.token_range[i][0], self.token_range[i][1] # 每个词对应的token的开始index和结束index
@@ -254,22 +254,22 @@ class Instance(object):
                     for col in range(s, e + 1):
                         self.word_pair_synpost[row][col] = synpost_vocab.stoi.get(word_level_degree[i][j], synpost_vocab.unk_index)
 
-# 加载实例，实例中包括了四种类型的句子特征的矩阵 + biaffine attention用到的相关数据 
+# 加载实例，实例中包括了四种类型的句子特征的矩阵 + biaffine attention用到的相关数据
 def load_data_instances(sentence_packs, post_vocab, deprel_vocab, postag_vocab, synpost_vocab, args): 
     instances = list()
-    tokenizer = BertTokenizer.from_pretrained(args.bert_model_path)
-    for sentence_pack in sentence_packs:
+    tokenizer = BertTokenizer.from_pretrained(args.bert_model_path) # 加载分词器
+    for sentence_pack in sentence_packs: # 处理每一个句子，将处理之后的封装之后的句子对象放到列表中
         instances.append(Instance(tokenizer, sentence_pack, post_vocab, deprel_vocab, postag_vocab, synpost_vocab, args))
-    return instances
+    return instances # 返回实例
 
 
 class DataIterator(object):
     def __init__(self, instances, args):
         self.instances = instances
         self.args = args
-        self.batch_count = math.ceil(len(instances)/args.batch_size)
+        self.batch_count = math.ceil(len(instances)/args.batch_size) # math.ceil()向上取整
 
-    def get_batch(self, index):
+    def get_batch(self, index): # 这个函数什么时候调用的呢？？？
         sentence_ids = []
         sentences = []
         sens_lens = []
@@ -286,6 +286,7 @@ class DataIterator(object):
         word_pair_pos = []
         word_pair_synpost = []
 
+        # 获取一个batchsize大小的数据,相同属性的值放到一个列表中
         for i in range(index * self.args.batch_size,
                        min((index + 1) * self.args.batch_size, len(self.instances))):
             sentence_ids.append(self.instances[i].id)
@@ -304,8 +305,8 @@ class DataIterator(object):
             word_pair_deprel.append(self.instances[i].word_pair_deprel)
             word_pair_pos.append(self.instances[i].word_pair_pos)
             word_pair_synpost.append(self.instances[i].word_pair_synpost)
-
-        bert_tokens = torch.stack(bert_tokens).to(self.args.device)
+        # 每个batch作为一个统一的输入
+        bert_tokens = torch.stack(bert_tokens).to(self.args.device) # 
         lengths = torch.tensor(lengths).to(self.args.device)
         masks = torch.stack(masks).to(self.args.device)
         aspect_tags = torch.stack(aspect_tags).to(self.args.device)

@@ -61,7 +61,7 @@ def train(args): # 训练
     dev_sentence_packs = json.load(open(args.prefix + args.dataset + '/dev.json')) # 验证集
 
     # load 四个句子特征各自的类别。这四个都是什么意思？应该是四个句子特征各自的标签类别信息
-    post_vocab = VocabHelp.load_vocab(args.prefix + args.dataset + '/vocab_post.vocab') # 
+    post_vocab = VocabHelp.load_vocab(args.prefix + args.dataset + '/vocab_post.vocab') # 加载文件
     deprel_vocab = VocabHelp.load_vocab(args.prefix + args.dataset + '/vocab_deprel.vocab') # 
     postag_vocab = VocabHelp.load_vocab(args.prefix + args.dataset + '/vocab_postag.vocab') # 
     synpost_vocab = VocabHelp.load_vocab(args.prefix + args.dataset + '/vocab_synpost.vocab') # 
@@ -88,14 +88,14 @@ def train(args): # 训练
     best_joint_epoch = 0
     for i in range(args.epochs):
         print('Epoch:{}'.format(i)) # 第几次循环数据集epoch
-        for j in trange(trainset.batch_count): # 第几个批次batch
+        for j in trange(trainset.batch_count): # 第几个批次batch。trange()用来显示进度条以及展示每一轮（iteration)所耗费的时间。
             # sentences: 句子, tokens: 句子分词之后的结果, lengths: 词经过toid操作之后的tokens列表长度, masks: 一个max_sequence_lenght的列表，对应句子token长度的位置为1，其他位置为0
             # aspect_tags: 列表，padding部分为-1，其他部分为0， aspect部分是aspect第一个词的第一个token为1， 中间词的第一个token为2
             # tags: 矩阵，十种关系的哪一种，不是都是-1
             # tags_symmetry: 
             _, sentences, tokens, lengths, masks, _, _, aspect_tags, tags, word_pair_position, \
-            word_pair_deprel, word_pair_pos, word_pair_synpost, tags_symmetry = trainset.get_batch(j)
-            tags_flatten = tags.reshape([-1]) # 将矩阵展平
+            word_pair_deprel, word_pair_pos, word_pair_synpost, tags_symmetry = trainset.get_batch(j) # 对象.get_batch()函数调用，j从0开始，加载第一个batch。
+            tags_flatten = tags.reshape([-1]) # 将矩阵展平 16 x 102 x 102 -> 16*102*102
             tags_symmetry_flatten = tags_symmetry.reshape([-1]) # 将矩阵展平
             if args.relation_constraint: # 真实的矩阵和通过模型计算预测得到的矩阵之间进行求交叉熵进行拟合
                 predictions = model(tokens, masks, word_pair_position, word_pair_deprel, word_pair_pos, word_pair_synpost) # 
@@ -108,7 +108,7 @@ def train(args): # 训练
 
                 if args.symmetry_decoding: # 意思是仅仅解码对角线的值，对角线的值无非是方面词和意见词，没有情感极性的预测
                     l_p = F.cross_entropy(final_pred.reshape([-1, final_pred.shape[3]]), tags_symmetry_flatten, weight=weight, ignore_index=-1)
-                else: # 默认是进行元组的抽取
+                else: # 默认是进行元组的抽取 16 x 102 x 102 x 10 -> reshape()操作 -> 16*102*102 x 10 
                     l_p = F.cross_entropy(final_pred.reshape([-1, final_pred.shape[3]]), tags_flatten, weight=weight, ignore_index=-1)
 
                 loss = l_ba + l_rpd + l_dep + l_psc + l_tbd + l_p
@@ -135,7 +135,7 @@ def train(args): # 训练
 
 
 def eval(model, dataset, args, FLAG=False):
-    model.eval()
+    model.eval() # 在评估模式下，batchNorm层，dropout层等用于优化训练而添加的网络层会被关闭，从而使得评估时不会发生偏移。
     with torch.no_grad():
         all_ids = []
         all_sentences = []
